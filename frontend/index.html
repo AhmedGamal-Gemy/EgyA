@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Education Session Copilot</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>AI Education Session Copilot</h1>
+    <p class="constraint-note">
+      Requires Chrome or Edge. Run your meeting (Zoom / Google Meet / Microsoft Teams)
+      via its <strong>web client</strong> in another tab — not the desktop app — then
+      click "Start" and choose that tab with "Share tab audio" checked.
+      See plan section 6 for why.
+    </p>
+  </header>
+
+  <main>
+    <section class="controls">
+      <label for="sessionIdInput">Session ID (optional — auto-generated if left blank)</label>
+      <input id="sessionIdInput" type="text" placeholder="e.g. photosynthesis-kids-2026-07-06" />
+
+      <div class="buttons">
+        <button id="startButton">Start capturing</button>
+        <button id="stopButton">Stop</button>
+      </div>
+
+      <p id="status">Idle.</p>
+    </section>
+
+    <section class="transcript-section">
+      <h2>Live transcript</h2>
+      <div id="transcript"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

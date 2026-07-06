@@ -1,0 +1,82 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  litellm-proxy:
+    image: ghcr.io/berriai/litellm:main-latest
+    env_file: [.env]
+    volumes:
+      - ./shared/litellm_config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "4000:4000"
+
+  # ASR — CPU is the working assumption (plan section 5b). GPU/ROCm via
+  # --backend whisper is a Day 2-3 spike once AMD Developer Cloud credit lands,
+  # not the default here.
+  #
+  # NOTE: there is no official pre-built image on Docker Hub for this project —
+  # the documented deployment method is to build from the repo's own Dockerfile.
+  # Building directly from the git repo as context avoids vendoring their code
+  # into this repo while still using their real, maintained Dockerfile.cpu.
+  whisper-livekit:
+    build:
+      context: https://github.com/QuentinFuxa/WhisperLiveKit.git
+      dockerfile: Dockerfile.cpu
+      args:
+        EXTRAS: "cpu,diarization-diart"
+    env_file: [.env]
+    # --backend whisper (not the default faster-whisper) — see plan section 5b:
+    # CTranslate2 (faster-whisper's backend) has no ROCm support; vanilla
+    # PyTorch whisper does, per AMD's own published ROCm blog.
+    # --backend-policy localagreement (not simulstreaming) — see plan section 3:
+    # trades latency for stability, safer for a live demo.
+    # ${VAR} here is resolved by Docker Compose itself from the root .env file
+    # at parse time, not by the shell inside the container.
+    command:
+      [
+        "--backend", "${ASR_BACKEND:-whisper}",
+        "--backend-policy", "${ASR_POLICY:-localagreement}",
+        "--diarization",
+        "--pcm-input",
+        "--host", "0.0.0.0",
+        "--port", "8050",
+      ]
+    ports:
+      - "8050:8050"
+
+  setup-agent:
+    build:
+      context: .
+      dockerfile: services/setup_agent/Dockerfile
+    env_file: [.env]
+    depends_on: [litellm-proxy]
+    ports:
+      - "8001:8001"
+
+  stream-judge:
+    build:
+      context: .
+      dockerfile: services/stream_judge/Dockerfile
+    env_file: [.env]
+    depends_on: [litellm-proxy, redis, whisper-livekit]
+    ports:
+      - "8002:8002"
+
+  report-agent:
+    build:
+      context: .
+      dockerfile: services/report_agent/Dockerfile
+    env_file: [.env]
+    depends_on: [litellm-proxy, redis]
+    ports:
+      - "8003:8003"
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:80"
+    depends_on: [setup-agent, stream-judge, whisper-livekit]

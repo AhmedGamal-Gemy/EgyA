@@ -1,0 +1,36 @@
+model_list:
+  # Fireworks-hosted models
+  - model_name: fireworks-default
+    litellm_params:
+      model: fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct
+      api_key: os.environ/FIREWORKS_API_KEY
+
+  - model_name: fireworks-gemma
+    litellm_params:
+      model: fireworks_ai/accounts/fireworks/models/gemma-2-27b-it
+      api_key: os.environ/FIREWORKS_API_KEY
+      # "Best Use of Gemma Models" side challenge — see plan section 3/10.
+      # Near-zero effort: point one agent's calls here instead of the default.
+
+  # AMD Developer Cloud-hosted models
+  - model_name: amd-cloud-default
+    litellm_params:
+      model: openai/<amd-cloud-model-id>  # fill in once AMD Developer Cloud credit lands
+      api_base: os.environ/AMD_DEVELOPER_CLOUD_API_BASE
+      api_key: os.environ/AMD_DEVELOPER_CLOUD_API_KEY
+
+  # Local fallback if credits run out mid-hackathon
+  - model_name: ollama-fallback
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://ollama:11434
+
+router_settings:
+  # LLM_PROVIDER env var (see shared/constants.py) picks which alias
+  # agents actually call — set at the agent level, not hardcoded here.
+  routing_strategy: simple-shuffle
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  
