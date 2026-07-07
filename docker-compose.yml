@@ -13,6 +13,23 @@ services:
     ports:
       - "4000:4000"
 
+
+
+
+
+  whisper-livekit-base:
+    build:
+      context: https://github.com/QuentinFuxa/WhisperLiveKit.git
+      dockerfile: Dockerfile.cpu
+      args:
+        EXTRAS: "cpu"
+      tags:
+        - egya-whisper-livekit-base:latest
+    command: ["true"]   # no-op: prevents it running the full server when started
+    entrypoint: []
+
+    # no ports, no command — this is just a build target, never actually run
+
   # ASR — CPU is the working assumption (plan section 5b). GPU/ROCm via
   # --backend whisper is a Day 2-3 spike once AMD Developer Cloud credit lands,
   # not the default here.
@@ -23,11 +40,15 @@ services:
   # into this repo while still using their real, maintained Dockerfile.cpu.
   whisper-livekit:
     build:
-      context: https://github.com/QuentinFuxa/WhisperLiveKit.git
-      dockerfile: Dockerfile.cpu
+      context: ./services/whisper_livekit_patch
       args:
-        EXTRAS: "cpu,diarization-diart"
+        BASE_IMAGE: egya-whisper-livekit-base:latest
+
+    depends_on: [whisper-livekit-base]
     env_file: [.env]
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+
     # --backend whisper (not the default faster-whisper) — see plan section 5b:
     # CTranslate2 (faster-whisper's backend) has no ROCm support; vanilla
     # PyTorch whisper does, per AMD's own published ROCm blog.
@@ -39,13 +60,19 @@ services:
       [
         "--backend", "${ASR_BACKEND:-whisper}",
         "--backend-policy", "${ASR_POLICY:-localagreement}",
-        "--diarization",
+        # "--diarization",
+        # "--diarization-backend", "sortformer",
         "--pcm-input",
         "--host", "0.0.0.0",
         "--port", "8050",
       ]
     ports:
       - "8050:8050"
+    
+
+
+
+
 
   setup-agent:
     build:
@@ -80,3 +107,6 @@ services:
     ports:
       - "3000:80"
     depends_on: [setup-agent, stream-judge, whisper-livekit]
+    
+volumes:
+  hf-cache:
