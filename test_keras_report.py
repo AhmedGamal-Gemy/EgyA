@@ -1,59 +1,68 @@
 import asyncio
 import os
-from google.adk.models.lite_llm import LiteLlm
+import json
+
+# Load .env manually for testing
+if os.path.exists(".env"):
+    with open(".env", "r") as f:
+        for line in f:
+            if line.strip() and not line.startswith("#"):
+                key, val = line.strip().split("=", 1)
+                os.environ[key] = val
+
 from shared.enums.flag_type import FlagType
 from shared.schemas.report import FlagSummary
 from services.report_agent.tools.generate_report import generate_report
-from services.report_agent.agent import root_agent
-
-# Use Gemini directly
-root_agent.model = LiteLlm(
-    model="gemini/gemini-2.5-flash", api_key=os.environ.get("GEMINI_API_KEY")
-)
-
 
 async def main():
-    print("Testing Report Agent with a simulated Keras Session...")
+    print("==================================================")
+    print("Testing Report Agent with a simulated Keras Session (GROQ)")
+    print("==================================================\n")
     session_id = "keras_session_001"
 
-    # We pass empty flags because the current generate_report prompt
-    # only reads from flag_summary.
     flags = []
 
     # Simulate FlagSummaries extracted from the Keras transcript session
     flag_summary = [
         FlagSummary(
             flag_type=FlagType.CONFUSION,
-            count=1,
+            count=2,
             examples=[
-                "Student 1: 'Wait, why do we need multiple inputs? I don't get the Siamese network example.'"
+                "Student 2: 'Wait a second, I am a bit lost here. Why do we put the (inputs) at the very end of the Dense layer line?'",
+                "Student 1: 'I completely missed everything you just did with GradientTape.'"
             ],
         ),
         FlagSummary(
             flag_type=FlagType.WRONG_ANSWER,
-            count=2,
+            count=1,
             examples=[
-                "Question: Which API offers the most flexibility? Student 1 answered: 'Sequential API' (Expected: Subclassing API)",
-                "Question: What does tf.GradientTape do? Student 2 answered: 'It stacks layers' (Expected: Custom training loop)",
+                "Question: what is the default optimizer we usually use when compiling our Keras models for basic classification? Student 3 answered: 'I think it is the mean squared error optimizer.' (Expected: Adam optimizer)",
             ],
         ),
         FlagSummary(
             flag_type=FlagType.PACING,
             count=1,
             examples=[
-                "System: Pacing check - explanation of subclassing and dynamic graphs was very fast. Consider slowing down."
+                "System: Pacing check - explanation of GradientTape was very fast. Student 1 requested to slow down."
+            ],
+        ),
+        FlagSummary(
+            flag_type=FlagType.CLARITY,
+            count=1,
+            examples=[
+                "System: Clarity check - Functional API syntax was unclear for Student 2."
             ],
         ),
         FlagSummary(
             flag_type=FlagType.DISENGAGEMENT,
             count=1,
             examples=[
-                "Student 3 hasn't participated during the entire subclassing section."
+                "Student 4 hasn't participated during the entire session."
             ],
         ),
     ]
 
-    print("\n[Mocking the session data...]")
+    print("[Mocking the session data...]")
     for fs in flag_summary:
         print(f" - {fs.flag_type.value.upper()} ({fs.count}): {fs.examples[0]}")
 

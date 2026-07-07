@@ -20,6 +20,7 @@ class SessionReport(BaseModel):
 
     reinforcement_needed: List[str]
     delivery_adjustments: List[str]
+    improvement_tips: List[str]
 
     flag_summary: List[FlagSummary]
 
