@@ -12,6 +12,12 @@ model_list:
       # "Best Use of Gemma Models" side challenge — see plan section 3/10.
       # Near-zero effort: point one agent's calls here instead of the default.
 
+  # Gemini
+  - model_name: gemini-default
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
   # AMD Developer Cloud-hosted models
   - model_name: amd-cloud-default
     litellm_params:

@@ -11,7 +11,8 @@ from google.adk.models.lite_llm import LiteLlm
 # See setup_agent/agent.py for why this routes through our own litellm-proxy
 # rather than calling a provider directly.
 LITELLM_PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://litellm-proxy:4000")
-DEFAULT_MODEL_ALIAS = "openai/fireworks-default"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini")
+DEFAULT_MODEL_ALIAS = f"openai/{LLM_PROVIDER}-default"
 
 # TODO: import and wire actual tool functions once written, e.g.:
 #   from tools.check_answer_correctness import check_answer_correctness
