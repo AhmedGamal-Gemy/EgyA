@@ -3,12 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from shared.enums.flag_type import AudienceLevel
+from shared.schemas.report import SessionReport
 from shared.schemas.session_package import SessionPackage
 
 app = FastAPI(title="Setup Agent")
 
-# See stream_judge/main.py for why this is needed — same cross-origin
-# frontend calling in.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,5 +30,16 @@ async def health():
 
 @app.post("/setup", response_model=SessionPackage)
 async def setup(req: SetupRequest):
-    # TODO: wire to shared/run_agent.py + tools/compile_session_package.py
-    raise NotImplementedError("Wire this up on Day 1 — see plan section 6, Setup Agent")
+    from tools.compile_session_package import compile_session_package
+    return await compile_session_package(
+        session_id=req.session_id,
+        topic=req.topic,
+        audience_level=req.audience_level,
+        goals=req.goals,
+    )
+
+
+@app.post("/session/{session_id}/previous-report")
+async def receive_previous_report(session_id: str, report: SessionReport):
+    print(f"[setup_agent] Received previous report for session {session_id}")
+    return {"status": "ok", "session_id": session_id}

@@ -426,22 +426,32 @@ Restarts on every file save. Requires `uv` installed locally.
 
 ## 8b. Implementation Status
 
-Snapshot as of the last scaffolding pass — update as you build.
+Snapshot as of **July 8 2026** — update as you build.
 
 | Path | Owner | Status |
 |---|---|---|
-| `shared/schemas/` (flag, session_package, report) | Both | ✅ Done, functionally tested |
+| `shared/schemas/` (flag, session_package, report) | Both | ✅ Done, FlagSummary + SessionReport added |
 | `shared/enums/` (FlagType, FlagSeverity, AudienceLevel, message templates) | Both | ✅ Done |
-| `shared/constants.py` | Both | ✅ Done (no longer includes the removed `ASR_LOW_CONFIDENCE_THRESHOLD` — see section 6a) |
+| `shared/constants.py` | Both | ✅ Done |
 | `shared/run_agent.py` | Both | ✅ Ready, verified against real `google-adk` |
-| `services/setup_agent/` | Ahmed | `agent.py` ✅, all 5 tools scaffolded (LLM calls still `TODO`), `POST /setup` wired to raise the stub deliberately |
-| `services/stream_judge/` | Sondos + Ahmed | `agent.py` ✅, all 6 tools scaffolded (`write_flag`, `track_speaker_activity` fully implemented; `check_answer_correctness`, `assess_pacing_clarity`, `detect_confusion` need their LLM calls; `notify_instructor` implemented), `transcript_receiver.py` wired |
-| `services/report_agent/` | Sondos | `agent.py` ✅, all 4 tools scaffolded (`fetch_session_flags`, `aggregate_flags` fully implemented; `generate_report`, `push_to_next_setup` need wiring) |
-| `frontend/` | Sondos | ✅ Capture pipeline complete and unit-tested (downsampling math, PCM conversion, diff-protocol reconstruction all verified against real numbers/documented examples) — `getDisplayMedia` → AudioWorklet → WhisperLiveKit → Stream Judge forwarding, all real code, not pseudocode |
-| `docker-compose.yml` | Shared | ✅ All 7 services wired, WhisperLiveKit builds from its real repo (no fabricated image), CORS added to all three FastAPI services |
-| `prompts/` | Both | Placeholder READMEs only — actual prompt content is genuinely still to-do for whoever wires each tool's LLM call |
+| `shared/litellm_config.yaml` | Both | ✅ 5 model providers configured (Fireworks, Gemini, AMD Cloud, Ollama, Gemma) — previously a placeholder |
+| `services/setup_agent/` | Ahmed | `agent.py` ✅ (creates ADK agent). All 5 tool files exist but are **stubs** (`NotImplementedError`). `POST /setup` **stub** (`NotImplementedError`). ADK agent `tools=[]` — tools exist on disk but not imported/wired. |
+| `services/stream_judge/` | Sondos + Ahmed | `agent.py` ✅. All 6 tools **wired with real LLM calls** — `check_answer_correctness`, `assess_pacing_clarity`, `detect_confusion` all call Groq/LiteLLM with prompts + retry logic. `write_flag`, `track_speaker_activity`, `notify_instructor` implemented. **`transcript_receiver.py` still a stub** (`NotImplementedError`) — this is the critical gap: frontend sends chunks here but no judgment tools are called yet. |
+| `services/report_agent/` | Sondos | `agent.py` ✅. `POST /report` **fully wired** (fetch flags → aggregate → LLM generate_report → push_to_next_setup). `generate_report` has real Groq/LiteLLM call with structured JSON output. `push_to_next_setup` calls Setup Agent endpoint that doesn't exist yet. |
+| `frontend/` | Sondos | ✅ Real end-to-end verified: getDisplayMedia → AudioWorklet → WhisperLiveKit WebSocket → Stream Judge forwarding. Audio confirmed flowing (tested against CPU whisper-livekit live). config.js + envsubst for runtime port overrides. |
+| `docker-compose.yml` | Shared | ✅ All 7 services wired, parameterized ports via .env, healthchecks, CORS on all FastAPI services. |
+| `prompts/` | Both | Empty `prompts/README.md` placeholders deleted. Prompts are now **embedded inline** in each tool's Python function (check_answer_correctness, assess_pacing_clarity, detect_confusion, generate_report). |
+| Tests | Both | `test_stream_judge.py`, `test_gemini.py`, `test_keras_report.py` added — verify LLM tool calls. |
 
-**What "TODO: wire up a LiteLLM call" actually means in the remaining files:** the function signature, imports, and calling context are all real and tested — what's missing is the actual prompt text and the `await litellm.acompletion(...)` (or equivalent) call inside. This is deliberate scoping, not an oversight: writing good prompts is domain work you two should do deliberately, not something to fabricate confidently in a planning pass.
+### Remaining gaps
+
+| Gap | Blocking? | Notes |
+|---|---|---|
+| `transcript_receiver.py` — judgment pipeline not wired | 🔴 **Blocks demo** | Frontend sends chunks here, but it raises NotImplementedError. `assess_pacing_clarity`, `detect_confusion`, `check_answer_correctness`, `track_speaker_activity`, `write_flag` all ready to call — just need to be orchestrated from this endpoint. |
+| Setup Agent 5 tools + `POST /setup` | 🔴 **Blocks demo** | No session content can be generated. All 5 tool files exist but are stubs. |
+| `push_to_next_setup` → Setup Agent | 🟡 Non-blocking for demo | Calls `/session/{id}/previous-report` which Setup Agent doesn't expose yet. Loop-closing piece — can demo without it. |
+| Setup Agent ADK `tools=[]` | 🟡 Non-blocking | Tools exist as files, just need importing into agent.py. |
+| GPU ASR (ROCm) | 🟢 Stretch goal | CPU whisper works but is slow (~3.5min lag in 6min). Plan section 5b covers the path. |
 
 ---
 

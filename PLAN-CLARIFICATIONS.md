@@ -48,63 +48,60 @@ Both hit the same Redis + LiteLLM containers. Each gets hot-reload on their own 
 
 ---
 
-## 2. Dockerfile: `uv pip install -r pyproject.toml` Won't Work
+## 2. Dockerfile: `uv pip install -r pyproject.toml` — RESOLVED
 
-Every service Dockerfile contains:
-
-```dockerfile
-COPY services/X/pyproject.toml ./
-RUN uv pip install --system --no-cache -r pyproject.toml
-```
-
-`-r` flag reads requirements.txt format (`package>=version` per line). `pyproject.toml` is TOML — parsers will reject it.
+**Update (July 8):** This was tested and confirmed working — `uv pip install --system -r pyproject.toml` correctly installs from a properly-formatted pyproject.toml. The Dockerfiles are correct as-is (see PLAN.md section 8a for the full verification).
 
 ---
 
-## 3. ⚠️ ASR Confidence Scores — WhisperLiveKit Doesn't Provide Them
+## 3. ⚠️ ASR Confidence Scores — WhisperLiveKit Doesn't Provide Them — RESOLVED
 
-The plan (section 6) references `ASR_LOW_CONFIDENCE_THRESHOLD = 0.6` and `asr_confidence` to gate compounding errors. The `check_answer_correctness` function returns `"uncertain"` when confidence is below that threshold.
-
-**WhisperLiveKit's actual behavior:**
-
-| Endpoint | Confidence output |
-|---|---|
-| Native `/asr` WebSocket | None — `FrontData` schema has `text`, `speaker`, timestamps but no confidence field |
-| Deepgram-compat `/v1/listen` | Hardcoded to `0.0` — confirmed in source (`whisperlivekit/deepgram_compat.py` lines 66 and 112) |
-
-**Consequence:** If the `ASR_LOW_CONFIDENCE_THRESHOLD` gate is enforced, `check_answer_correctness` will always receive 0.0 (or undefined) and always return `"uncertain"`. Correctness checking will be non-functional with the gate in place.
-
-The `ASR_LOW_CONFIDENCE_THRESHOLD` constant, `UNCERTAIN_ANSWER` FlagType, and `check_answer_correctness`'s confidence gate all depend on confidence data that WhisperLiveKit does not currently emit.
+**Update (July 8):** The codebase now handles this correctly:
+- `ASR_LOW_CONFIDENCE_THRESHOLD` constant removed from `shared/constants.py`
+- `check_answer_correctness` uses the LLM's own three-way verdict (`correct`/`incorrect`/`uncertain`) with a prompt that explicitly instructs uncertainty on garbled/ambiguous transcripts — no numeric confidence pre-filter
+- `UNCERTAIN_ANSWER` FlagType retained as the LLM's own judgment output (not a confidence gate), which is the correct pattern
 
 ---
 
 ## 4. Missing Pieces in the Skeleton
 
-### `agent.py` files
+### `agent.py` files — RESOLVED
 
-The plan (section 8) shows `services/*/agent.py` for each service (ADK agent definitions). None exist. `shared/run_agent.py` exists and is ready, but nothing imports it.
+All three services have `agent.py` with working ADK agent definitions importing `LiteLlm` from `google.adk.models.lite_llm`. `shared/run_agent.py` exists and is ready.
 
-### Setup Agent `tools/` — empty
+### Setup Agent `tools/` — STILL STUBS
 
-Plan lists: `generate_slides.py`, `generate_explanations.py`, `generate_activities.py`, `generate_quiz.py`, `compile_session_package.py`. None exist.
+All 5 files exist: `generate_slides.py`, `generate_explanations.py`, `generate_activities.py`, `generate_quiz.py`, `compile_session_package.py` — but each raises `NotImplementedError`. No LLM calls wired yet. ADK agent also has `tools=[]` — tools not imported/wired.
 
-### Stream Judge — missing tools
+### Stream Judge — tools RESOLVED
 
-Plan lists: `assess_pacing_clarity.py`, `detect_confusion.py`, `notify_instructor.py`. None exist. `check_answer_correctness.py` exists but has no LLM call wired. `track_speaker_activity.py` and `write_flag.py` are implemented.
+All 6 tools exist and are wired with real LLM calls:
+- `check_answer_correctness.py` ✅ — Groq/LiteLLM call, three-way verdict, retry logic
+- `assess_pacing_clarity.py` ✅ — Groq/LiteLLM call, JSON output parsing
+- `detect_confusion.py` ✅ — Groq/LiteLLM call, yes/no verdict
+- `notify_instructor.py` ✅ — WebSocket push to dashboard
+- `track_speaker_activity.py` ✅ — in-memory per-speaker tracking
+- `write_flag.py` ✅ — Redis-backed flag persistence
 
-### Report Agent — missing tools
+**Remaining:** `transcript_receiver.py` is still a stub — the orchestration endpoint that receives chunks from the frontend and calls the tools above is not wired.
 
-Plan lists: `generate_report.py`, `push_to_next_setup.py`. None exist. `fetch_session_flags.py` and `aggregate_flags.py` are implemented.
+### Report Agent — tools MOSTLY RESOLVED
 
-### `prompts/` directories — all empty
+All 4 files exist and are wired:
+- `fetch_session_flags.py` ✅ — Redis read, returns typed Flag objects
+- `aggregate_flags.py` ✅ — Groups/counts by flag_type
+- `generate_report.py` ✅ — Groq/LiteLLM call, structured SessionReport output
+- `push_to_next_setup.py` — Exists but calls Setup Agent endpoint that doesn't exist yet
 
-All three services have `prompts/` directories. All are empty.
+### `prompts/` directories — RESOLVED (inline)
+
+Empty `prompts/README.md` placeholders deleted. Prompts are now embedded directly in each tool's Python function, which is the better pattern — keeps prompt + tool call co-located.
 
 ---
 
-## 5. `pyproject.toml` Missing `[build-system]`
+## 5. `pyproject.toml` Missing `[build-system]` — RESOLVED
 
-Each service's `pyproject.toml` has `[project]` with dependencies listed, but no `[build-system]` table. `pip install -e .` may not work without it.
+All three `pyproject.toml` files now have `[build-system]` tables. `uv pip install -e .` works correctly (verified in PLAN.md section 8a).
 
 ---
 
@@ -112,12 +109,13 @@ Each service's `pyproject.toml` has `[project]` with dependencies listed, but no
 
 | Service | Owner | Status |
 |---|---|---|
-| `services/setup_agent/` | Ahmed | Stub — `POST /setup` raises NotImplementedError, tools/ empty |
-| `services/stream_judge/` | Sondos + Ahmed | `POST /transcript-chunk` stub, 3/6 tools exist (write_flag ✅, track_speaker_activity ✅, check_answer_correctness ❌) |
-| `services/report_agent/` | Sondos | `POST /report` raises NotImplementedError, 2/4 tools exist (fetch_session_flags ✅, aggregate_flags ✅) |
-| `shared/schemas/` | Both | Flag, SessionPackage, SessionReport ✅ |
-| `shared/enums/` | Both | FlagType, FlagSeverity, AudienceLevel, message templates ✅ |
-| `shared/run_agent.py` | Both | Ready ✅ |
-| `shared/constants.py` | Both | `ASR_LOW_CONFIDENCE_THRESHOLD` — see section 3 |
-| `frontend/` | Sondos | Capture pipeline scaffolded ✅ — parseTranscriptMessage() needs real server verification |
-| `docker-compose.yml` | Shared | All 6 services wired ✅ — see section 2 for Dockerfile build issue |
+| `services/setup_agent/` | Ahmed | 🟡 **Stub** — `POST /setup` raises NotImplementedError. All 5 tool files exist but are stubs. ADK agent `tools=[]`. Needs LLM calls wired + endpoint implemented. |
+| `services/stream_judge/` | Sondos + Ahmed | 🟡 **Tools done, endpoint stub** — All 6 tools wired with real LLM calls (check_answer_correctness ✅, assess_pacing_clarity ✅, detect_confusion ✅, write_flag ✅, track_speaker_activity ✅, notify_instructor ✅). **`transcript_receiver.py` still a stub** — the orchestration endpoint that calls the tools when a chunk arrives is not wired. |
+| `services/report_agent/` | Sondos | ✅ **Mostly done** — `POST /report` fully wired (fetch → aggregate → LLM generate → push). `push_to_next_setup` calls Setup Agent endpoint that doesn't exist yet (non-blocking for demo). |
+| `shared/schemas/` | Both | ✅ Done — Flag, SessionPackage, SessionReport, FlagSummary |
+| `shared/enums/` | Both | ✅ Done |
+| `shared/run_agent.py` | Both | ✅ Ready |
+| `shared/constants.py` | Both | ✅ Done |
+| `shared/litellm_config.yaml` | Both | ✅ 5 model providers configured (Fireworks, Gemini, AMD Cloud, Ollama, Gemma) |
+| `frontend/` | Sondos | ✅ Real end-to-end verified — audio flows to WhisperLiveKit, config.js + envsubst for port overrides |
+| `docker-compose.yml` | Shared | ✅ All 7 services wired, parameterized ports, healthchecks |
