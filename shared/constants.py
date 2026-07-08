@@ -19,6 +19,9 @@ DISENGAGEMENT_SILENCE_THRESHOLD_SECONDS = 120  # a speaker silent this long may 
 
 # LLM routing
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "fireworks")  # "fireworks" | "amd_cloud" | "ollama"
+LITELLM_PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://litellm-proxy:4001")
+LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.7"))
+DIRECT_LLM_MODEL = os.environ.get("DIRECT_LLM_MODEL", "groq/llama-3.3-70b-versatile")
 ASR_POLICY = os.environ.get("ASR_POLICY", "localagreement")  # vs "simulstreaming"
 ASR_BACKEND = os.environ.get("ASR_BACKEND", "whisper")  # vanilla PyTorch — see plan section 5b
                                                           # ("faster-whisper" default has no ROCm support)
