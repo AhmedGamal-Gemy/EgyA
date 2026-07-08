@@ -18,7 +18,7 @@ Services:
 - `setup-agent` — :8001
 - `stream-judge` — :8002
 - `report-agent` — :8003
-- `litellm-proxy` — :4000
+- `litellm-proxy` — :4001
 - `whisper-livekit` — :8000
 - `redis` — :6379
 

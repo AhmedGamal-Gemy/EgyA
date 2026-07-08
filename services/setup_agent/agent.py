@@ -14,7 +14,7 @@ from google.adk.models.lite_llm import LiteLlm
 # switch every agent between Fireworks/AMD Developer Cloud/Ollama with one
 # config change, since the proxy holds the real provider routing, not this
 # agent code.
-LITELLM_PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://litellm-proxy:4000")
+LITELLM_PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://litellm-proxy:4001")
 # model_name alias from shared/litellm_config.yaml's model_list —
 # "openai/" prefix tells litellm to treat this as an OpenAI-compatible
 # endpoint (which our own proxy is), not call Fireworks/AMD directly.
