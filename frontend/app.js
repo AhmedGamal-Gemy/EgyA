@@ -11,41 +11,36 @@
  *      s16le, since WhisperLiveKit's --pcm-input mode expects that format
  *      and browsers default to 44.1/48kHz.
  *   3. This app connects DIRECTLY to WhisperLiveKit's /asr WebSocket
- *      (Option A from the plan), using mode=diff.
- *   4. WhisperLiveKit sends transcription results back over that same
- *      connection. Each newly-committed line is forwarded to Stream
- *      Judge's endpoint for judgment.
+ *      (Option A from the plan) and streams PCM frames to it.
+ *   4. WhisperLiveKit sends FrontData objects back (confirmed from source:
+ *      whisperlivekit/timed_objects.py at main). Each newly received
+ *      committed line is forwarded to Stream Judge's endpoint for judgment.
  *
- * PROTOCOL — confirmed from WhisperLiveKit's official docs/API.md
- * (not guessed — see plan section 6 for the citation), summarized here:
+ * PROTOCOL — confirmed from WhisperLiveKit's source, not guessed:
  *
  *   On connect, server sends once:
- *     {"type": "config", "useAudioWorklet": true, "mode": "diff"}
+ *     {"type": "config", "useAudioWorklet": true, "mode": "full"}
  *
- *   With ?mode=diff (used here instead of the default "full" mode,
- *   because it gives new_lines explicitly instead of resending the
- *   entire line list on every update):
- *     First message: {"type": "snapshot", "seq": 1, "lines": [...], ...}
- *     Then:          {"type": "diff", "seq": N, "new_lines": [...],
- *                      "lines_pruned": <int, optional>, ...}
- *
- *   Each line: {"speaker": <int>, "text": <string|null>, "start": ..., "end": ...}
- *     speaker === -2 with text === null means a silence segment — skip it.
+ *   Data messages (serialized FrontData):
+ *     {
+ *       "status": "",
+ *       "lines": [{"speaker": <int>, "text": <string>, "start": "H:MM:SS.cc", "end": "H:MM:SS.cc"}, ...],
+ *       "buffer_transcription": "interim text...",
+ *       "buffer_diarization": "",
+ *       "buffer_translation": "",
+ *       "remaining_time_transcription": 0.0,
+ *       "remaining_time_diarization": 0.0
+ *     }
+ *     - "lines" holds committed/finalized segments.
+ *     - "buffer_transcription" holds provisional (not yet finalized) text.
+ *     - A line with speaker===-2 and text===null is a silence segment — skip it.
+ *     - There is NO per-line confidence score in the FrontData format
+ *       (confirmed in timed_objects.py — Segment.to_dict() omits it).
  *
  *   At the very end: {"type": "ready_to_stop"}
- *
- * IMPORTANT CORRECTION vs an earlier draft of this file: WhisperLiveKit's
- * protocol does NOT include a per-line confidence score — this is
- * confirmed, not an oversight (its own Deepgram-compatible mode docs
- * explicitly say confidence is "not available"). The plan's original
- * "skip judgment below ASR confidence threshold" safeguard can't be
- * built as originally designed. Instead, uncertainty is now handled
- * entirely by the Judge LLM's own three-way verdict (correct/incorrect/
- * uncertain) in check_answer_correctness — see plan section 6 for the
- * updated reasoning.
  */
 
-const WHISPER_LIVEKIT_WS_URL = window.WHISPER_LIVEKIT_WS_URL || 'ws://localhost:8000/asr?mode=diff';
+const WHISPER_LIVEKIT_WS_URL = window.WHISPER_LIVEKIT_WS_URL || 'ws://localhost:8050/asr';
 const STREAM_JUDGE_BASE_URL = window.STREAM_JUDGE_BASE_URL || 'http://localhost:8002';
 const TARGET_SAMPLE_RATE = 16000;
 const SILENCE_SPEAKER_ID = -2;
@@ -55,7 +50,7 @@ let displayStream = null;
 let audioContext = null;
 let workletNode = null;
 let whisperSocket = null;
-let localLines = []; // client-side reconstruction of committed lines, per the diff protocol
+let lastLineCount = 0;
 
 const statusEl = () => document.getElementById('status');
 const transcriptEl = () => document.getElementById('transcript');
@@ -65,40 +60,46 @@ function setStatus(text) {
   if (el) el.textContent = text;
 }
 
-function appendTranscriptLine(line) {
+function appendTranscriptLine(speaker, text) {
   const el = transcriptEl();
   if (!el) return;
-  const div = document.createElement('div');
-  div.className = 'transcript-line';
-  div.textContent = `[speaker ${line.speaker}] ${line.text}`;
-  el.appendChild(div);
+  const line = document.createElement('div');
+  line.className = 'transcript-line';
+  line.textContent = `[speaker ${speaker}] ${text}`;
+  el.appendChild(line);
   el.scrollTop = el.scrollHeight;
 }
 
-async function forwardLineToStreamJudge(line) {
+function updateInterimText(text) {
+  const el = transcriptEl();
+  if (!el) return;
+  let interim = el.querySelector('.interim');
+  if (!interim) {
+    interim = document.createElement('div');
+    interim.className = 'transcript-line interim';
+    interim.style.color = '#888';
+    interim.style.fontStyle = 'italic';
+    el.appendChild(interim);
+  }
+  interim.textContent = text ? `… ${text}` : '';
+}
+
+async function forwardLineToStreamJudge(speaker, text) {
   try {
     await fetch(`${STREAM_JUDGE_BASE_URL}/session/${sessionId}/transcript-chunk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
-        text: line.text,
-        speaker_id: String(line.speaker), // Stream Judge's schema uses string speaker_id; see plan section 6a
+        text: text,
+        speaker_id: String(speaker),
       }),
     });
   } catch (err) {
-    // Non-fatal: don't let a Stream Judge hiccup break live transcription
-    // display. Log and continue — this is a hackathon MVP, not a system
-    // that needs guaranteed delivery.
     console.warn('Failed to forward line to Stream Judge:', err);
   }
 }
 
-/**
- * Handles one incoming WebSocket message per WhisperLiveKit's documented
- * diff-mode protocol. Mutates localLines in place and forwards any newly
- * committed (non-silence) lines to Stream Judge.
- */
 function handleWhisperLiveKitMessage(raw) {
   let msg;
   try {
@@ -108,59 +109,49 @@ function handleWhisperLiveKitMessage(raw) {
     return;
   }
 
+  // Config message — sent once on connect
   if (msg.type === 'config') {
     console.log('WhisperLiveKit config:', msg);
     if (!msg.useAudioWorklet) {
-      console.warn('Server did NOT report useAudioWorklet=true — check --pcm-input is set (plan section 5b).');
+      console.warn('Server did not report useAudioWorklet=true — check --pcm-input is set.');
     }
     return;
   }
 
+  // End-of-session signal
   if (msg.type === 'ready_to_stop') {
     setStatus('Session ended.');
     return;
   }
 
-  let newLines = [];
+  // FrontData: broadcast on every transcription update
+  const lines = msg.lines || [];
+  const buffer = msg.buffer_transcription || '';
 
-  if (msg.type === 'snapshot') {
-    localLines = msg.lines || [];
-    newLines = localLines; // treat all initial lines as "new" for forwarding purposes
-  } else if (msg.type === 'diff') {
-    const pruned = msg.lines_pruned || 0;
-    if (pruned > 0) {
-      localLines.splice(0, pruned);
+  // Lines that are new since last message
+  if (lines.length > lastLineCount) {
+    const newLines = lines.slice(lastLineCount);
+    for (const line of newLines) {
+      if (line.speaker === SILENCE_SPEAKER_ID || line.text === null) {
+        continue;
+      }
+      appendTranscriptLine(line.speaker, line.text);
+      forwardLineToStreamJudge(line.speaker, line.text);
     }
-    newLines = msg.new_lines || [];
-    localLines = localLines.concat(newLines);
-    // Sanity check per the plan's documented client-reconstruction algorithm —
-    // a mismatch means the client fell out of sync and should reconnect.
-    if (typeof msg.n_lines === 'number' && localLines.length !== msg.n_lines) {
-      console.warn(`Line count out of sync (local=${localLines.length}, server n_lines=${msg.n_lines}) — consider reconnecting.`);
-    }
-  } else {
-    // Unexpected message shape — log it rather than silently ignoring,
-    // since this is exactly the kind of thing that should be caught on
-    // Day 1 if the real server behaves differently than documented.
-    console.warn('Unrecognized message shape from WhisperLiveKit:', msg);
-    return;
   }
+  lastLineCount = lines.length;
 
-  for (const line of newLines) {
-    if (line.speaker === SILENCE_SPEAKER_ID || line.text === null) {
-      continue; // silence segment, nothing to transcribe or judge
-    }
-    appendTranscriptLine(line);
-    forwardLineToStreamJudge(line);
-  }
+  // Show interim (not-yet-committed) text
+  updateInterimText(buffer);
 }
 
 function connectToWhisperLiveKit() {
-  localLines = [];
+  lastLineCount = 0;
   whisperSocket = new WebSocket(WHISPER_LIVEKIT_WS_URL);
   whisperSocket.binaryType = 'arraybuffer';
 
   whisperSocket.onopen = () => setStatus('Connected — listening...');
+
   whisperSocket.onmessage = (event) => handleWhisperLiveKitMessage(event.data);
 
   whisperSocket.onerror = (err) => {
@@ -209,22 +200,17 @@ async function startCapture() {
   };
 
   sourceNode.connect(workletNode);
-  // Deliberately NOT connecting workletNode to audioContext.destination —
-  // doing so would play the captured audio back out loud, which is not
-  // wanted here (we only want to process it, not echo it back).
 
   connectToWhisperLiveKit();
   setStatus('Capturing tab audio...');
 
-  // If the instructor stops sharing via the browser's own UI, clean up.
   audioTracks[0].addEventListener('ended', stopCapture);
 }
 
 function stopCapture() {
   if (whisperSocket) {
-    // Signal end-of-audio per the documented protocol so the server
-    // flushes remaining audio and sends ready_to_stop, rather than just
-    // dropping the connection abruptly.
+    // Send an empty byte buffer to signal end-of-audio so the server
+    // flushes its pipeline and sends ready_to_stop.
     if (whisperSocket.readyState === WebSocket.OPEN) {
       whisperSocket.send(new ArrayBuffer(0));
     }
@@ -243,6 +229,7 @@ function stopCapture() {
     displayStream.getTracks().forEach((t) => t.stop());
     displayStream = null;
   }
+  lastLineCount = 0;
   setStatus('Stopped.');
 }
 

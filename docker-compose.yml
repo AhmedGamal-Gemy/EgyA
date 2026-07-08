@@ -2,16 +2,16 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
 
   litellm-proxy:
     image: ghcr.io/berriai/litellm:main-latest
     env_file: [.env]
     volumes:
       - ./shared/litellm_config.yaml:/app/config.yaml
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/app/config.yaml", "--port", "${LITELLM_PORT:-4001}"]
     ports:
-      - "4000:4000"
+      - "${LITELLM_PORT:-4001}:${LITELLM_PORT:-4001}"
 
 
 
@@ -48,6 +48,7 @@ services:
     env_file: [.env]
     volumes:
       - hf-cache:/root/.cache/huggingface
+      - whisper-models:/root/.cache/whisper
 
     # --backend whisper (not the default faster-whisper) — see plan section 5b:
     # CTranslate2 (faster-whisper's backend) has no ROCm support; vanilla
@@ -64,10 +65,16 @@ services:
         # "--diarization-backend", "sortformer",
         "--pcm-input",
         "--host", "0.0.0.0",
-        "--port", "8050",
+        "--port", "${ASR_PORT:-8050}",
       ]
     ports:
-      - "8050:8050"
+      - "${ASR_PORT:-8050}:${ASR_PORT:-8050}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${ASR_PORT:-8050}/')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     
 
 
@@ -81,7 +88,7 @@ services:
     env_file: [.env]
     depends_on: [litellm-proxy]
     ports:
-      - "8001:8001"
+      - "${SETUP_AGENT_PORT:-8001}:8001"
 
   stream-judge:
     build:
@@ -90,7 +97,7 @@ services:
     env_file: [.env]
     depends_on: [litellm-proxy, redis, whisper-livekit]
     ports:
-      - "8002:8002"
+      - "${STREAM_JUDGE_PORT:-8002}:8002"
 
   report-agent:
     build:
@@ -99,14 +106,18 @@ services:
     env_file: [.env]
     depends_on: [litellm-proxy, redis]
     ports:
-      - "8003:8003"
+      - "${REPORT_AGENT_PORT:-8003}:8003"
 
   frontend:
     build:
       context: ./frontend
+    environment:
+      ASR_PORT: "${ASR_PORT:-8050}"
+      STREAM_JUDGE_PORT: "${STREAM_JUDGE_PORT:-8002}"
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on: [setup-agent, stream-judge, whisper-livekit]
     
 volumes:
   hf-cache:
+  whisper-models:
